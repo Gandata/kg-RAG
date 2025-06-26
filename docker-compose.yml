@@ -13,7 +13,7 @@ services:
       - postgres_data_kg_rag:/var/lib/postgresql/data
     networks:
       - rag_network
-  
+  #Test
   pgadmin:
     image: dpage/pgadmin4
     environment:
