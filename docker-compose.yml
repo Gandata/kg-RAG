@@ -1,0 +1,88 @@
+services:
+  postgres_db:
+    image: pgvector/pgvector:pg16 # Uses an image with pgvector pre-installed
+    container_name: kg_rag_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-user} # Use environment variables with defaults
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-rag_db}
+    ports:
+      - "${DB_PORT_HOST:-5433}:5432" # Expose on host port 5433 (configurable)
+    volumes:
+      - postgres_data_kg_rag:/var/lib/postgresql/data
+    networks:
+      - rag_network
+  
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@tuemail.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres_db
+    networks:
+      - rag_network
+
+  vllm_service:
+    image: vllm/vllm-openai:latest # Official vLLM image with OpenAI compatible API
+    container_name: kg_rag_vllm
+    restart: always
+    # Command to tell vLLM which model to load and serve
+    # Replace with your desired model from Hugging Face
+    command: ["--model", "${VLLM_MODEL_HF_ID:-mistralai/Mistral-7B-Instruct-v0.1}", "--tensor-parallel-size", "1"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all # Or specify number of GPUs e.g., 1
+              capabilities: [gpu]
+    ports:
+      - "${VLLM_PORT_HOST:-8000}:8000" # vLLM OpenAI API runs on port 8000 inside container
+    ipc: host # Recommended for vLLM stability
+    volumes: # Optional: Mount HuggingFace cache to speed up model downloads on restart
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    networks:
+      - rag_network
+
+  rag_app:
+    build:
+      context: ./rag_app # Path to your Python application's Dockerfile and code
+      dockerfile: Dockerfile
+    container_name: kg_rag_python_app
+    restart: always
+    depends_on:
+      - postgres_db
+      - vllm_service
+    environment:
+      # Database connection details (uses service name 'postgres_db' for host)
+      DB_HOST: postgres_db
+      DB_PORT_INTERNAL: 5432 # Internal port for Postgres
+      DB_NAME: ${DB_NAME:-rag_db}
+      DB_USER: ${DB_USER:-user}
+      DB_PASSWORD: ${DB_PASSWORD:-password}
+
+      # vLLM connection details (uses service name 'vllm_service' for host)
+      VLLM_API_BASE_URL: http://vllm_service:8000/v1
+      # This needs to match the model vLLM is serving (from the command above)
+      VLLM_MODEL_SERVED_NAME: ${VLLM_MODEL_HF_ID:-mistralai/Mistral-7B-Instruct-v0.1}
+
+      # Other app-specific settings
+      EMBEDDING_MODEL_NAME: sentence-transformers/all-MiniLM-L6-v2
+    volumes: # If your app writes logs or needs persistent data outside DB
+      - ./rag_app/data:/app/data # Example: Mount local data folder to /app/data in container
+    networks:
+      - rag_network
+    # If your basic_rag.py takes input():
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data_kg_rag: # Named volume for Postgres data persistence
+
+networks:
+  rag_network:
+    driver: bridge

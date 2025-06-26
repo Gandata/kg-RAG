@@ -1,0 +1,7 @@
+openai
+psycopg2-binary
+pgvector
+sentence-transformers
+torch
+transformers
+psycopg2
